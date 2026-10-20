@@ -1,0 +1,8 @@
+# Bilgisayara ozel calisma dosyalari
+*.log
+durum.json
+yedek/
+*.tmp
+
+# Yerel konusma kayitlari
+KONUSMALAR/
