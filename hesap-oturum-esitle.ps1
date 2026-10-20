@@ -28,8 +28,9 @@
          oturuma yeniden kiralar; onarımda da defterdeki eski kimliği yeniden kullanır.
       8. Hesaba göre ayrı tutulan iki düz ayar dosyasını eşitler (yalnız uygulama kapalıyken; açıkken uygulama
          dosyayı kendi belleğindeki hâliyle yeniden yazar ve ekleme kaybolur).
-      9. Arka planda izleyiciyi başlatır: izleyici 15 saniyede bir klasörleri eşitler, 10 dakikada bir onarım
-         ve ayar eşitlemesi yapar. Böylece hesap değiştirildiği anda öteki hesabın klasörü zaten güncel olur.
+      9. Arka planda izleyiciyi başlatır: izleyici 15 saniyede bir (uygulama kapalıyken 2 saniyede bir)
+         klasörleri eşitler, 10 dakikada bir onarım ve ayar eşitlemesi yapar. Böylece hesap değiştirildiği anda
+         öteki hesabın klasörü zaten güncel olur. İzleyici yalnızca güncelleme olan turları günlüğe yazmaz.
     Kenar çubuğu özel grupları uygulamanın Local Storage (leveldb) deposundadır; betik bunlara dokunmaz.
     Hiçbir dosya silinmez. Her çalıştırma idempotenttir; yapacak iş yoksa hiçbir şey değiştirmez.
     Çıktı yalnızca bir değişiklik ya da uyarı olduğunda üretilir (Claude Code SessionStart kancası bu çıktıyı bağlama ekler).
@@ -47,7 +48,8 @@
     Arka plan izleyicisi olarak sürekli çalışır (tek kopya). Normalde betik bunu kendisi başlatır.
 
 .PARAMETER ZorlaDuzelt
-    Eksik worktree çapası düzeltmesini uygulama açıkken de yapar. Düzeltme uygulama yeniden açılınca geçerli olur.
+    Eksik worktree çapası ve worktree kiralama düzeltmelerini uygulama açıkken de yapar. Uygulama bunları
+    bellekte tuttuğu için düzeltme, uygulama tepsiden Çıkış ile tamamen kapatılıp açılınca geçerli olur.
 
 .NOTES
     Günlük: %USERPROFILE%\Claude-hesap-esitleme\esitleme.log
@@ -337,6 +339,7 @@ function Esitle-Kok {
     }
 
     $kopyalanan = 0
+    $yeniDosya = 0
     $etkineGelen = 0
     $tasinan = 0
     foreach ($ad in @($surumler.Keys)) {
@@ -382,11 +385,14 @@ function Esitle-Kok {
                 }
             }
             $kopyalanan++
+            if (-not $mevcut) { $yeniDosya++ }
             if ($etkin -and $k.FullName -eq $etkin.FullName -and $ad -like 'local_*.json' -and -not $mevcut) { $etkineGelen++ }
         }
     }
 
-    if ($kopyalanan -gt 0 -or $tasinan -gt 0) {
+    # İzleyici her turda uygulamanın güncellediği kayıtları kopyalar; günlük şişmesin diye yalnızca güncelleme
+    # olan turlar izleyicide yazılmaz, yeni dosya ya da taşıma olan turlar her zaman yazılır
+    if ($tasinan -gt 0 -or $yeniDosya -gt 0 -or ($kopyalanan -gt 0 -and -not $Izle)) {
         $onek = $(if ($KuruCalisma) { '[KURU] ' } else { '' })
         Yaz-Gunluk ("{0}Kok: {1} -> {2} dosya esitlendi, {3} silinmis kayit yedege tasindi, etkin klasor: {4}\{5}" -f $onek, $Kok, $kopyalanan, $tasinan, $etkin.Parent.Name, $etkin.Name)
     }
@@ -1019,7 +1025,8 @@ function Baslat-Izleyici {
 function Calistir-Izleyici {
     <#
     .SYNOPSIS
-        Arka planda sürekli çalışır: 15 saniyede bir klasörleri, 10 dakikada bir onarım ve ayarları eşitler.
+        Arka planda sürekli çalışır: 15 saniyede bir (uygulama kapalıyken 2 saniyede bir) klasörleri, 10 dakikada
+        bir onarım ve ayarları eşitler.
     .DESCRIPTION
         Tek kopya çalışır (sistem genelinde kilit). Betik dosyası değişirse kendini yeni sürümle yeniden başlatır.
         Hatalar günlüğe yazılır, izleyici durmaz.

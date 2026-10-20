@@ -13,7 +13,7 @@ Uygulama, Code sekmesindeki oturum listesini her hesap için ayrı bir klasörde
 Hesap değişince öbür hesabın oturumları silinmez ama listede görünmez. `hesap-oturum-esitle.ps1` betiği şunları yapar:
 
 - **Çift yönlü eşitleme:** Bütün hesap klasörlerini (bir hesap birden fazla kuruluş klasörü kullanabilir) gerçek klasör olarak tutar. Her kayıt dosyasının en yeni sürümünü öbür klasörlere kopyalar. Değiştirilme zamanını koruduğu için kopyalar klasörler arasında gidip gelmez.
-- **Arka plan izleyicisi:** Gizli bir izleyici klasörleri 15 saniyede bir eşitler, 10 dakikada bir de kayıp kayıt onarımı ve ayar eşitlemesi yapar. Böylece hesap değiştirdiğin anda öbür hesabın listesi zaten günceldir. İzleyici tek kopya çalışır, betik güncellenince kendini yeni sürümle yeniden başlatır.
+- **Arka plan izleyicisi:** Gizli bir izleyici klasörleri 15 saniyede bir (uygulama kapalıyken 2 saniyede bir) eşitler. 10 dakikada bir de kayıp kayıt onarımı ve ayar eşitlemesi yapar. Böylece hesap değiştirdiğin anda öbür hesabın listesi zaten günceldir. İzleyici tek kopya çalışır ve betik güncellenince kendini yeni sürümle yeniden başlatır. Günlüğe yalnız yeni dosya ya da taşıma olan turları yazar.
 - **Silinen oturumlar geri gelmez:** Bir hesapta silinen oturumun (`deleted_<kimlik>` işareti) öbür klasörlerdeki kopyaları silinmez, `yedek\` klasörüne taşınır.
 - **Kayıp kayıt onarımı:** Sohbet dökümü duran ama listede kaydı olmayan oturumların kaydını dökümden yeniden oluşturur. Silinmiş oturumlar, son 15 dakikada açılan oturumlar ve uygulama günlüğüne göre yaşayan bir oturumun eski kimliği olan dökümler onarılmaz.
 - **Worktree kiralama onarımı:** Uygulama her worktree'yi `git-worktrees.json` defterinde bir oturuma kiralar (`leasedBy`). Dökümden yeniden üretilen bir oturum yeni kimlik alırsa defter eski kimliği gösterir. Uygulama o zaman worktree'yi yeniden kurmaya çalışır, "branch is checked out somewhere else" hatası verir ve o oturumda mesaj gönderilemez ("Bir şeyler ters gitti"). Betik, kiracısının kaydı olmayan worktree'leri onu kullanan gerçek oturuma yeniden kiralar. Onarımda da defterdeki eski kimliği yeniden kullanır. Ayrıca eksik worktree çapasını (`gitAnchors`) ekler. Bunları uygulama kapalıyken yapar; uygulama kapalıyken izleyici 2 saniyede bir bakar. `-ZorlaDuzelt` ile uygulama açıkken de yapar.
@@ -47,7 +47,7 @@ Her bilgisayarda bir kez yapılır. Windows PowerShell 5.1 yeterli; yönetici ye
    powershell -NoProfile -ExecutionPolicy Bypass -File .\CLAUDE_BIRLESTIR\kur.ps1
    ```
 
-4. Claude uygulamasını tepsideki simgeden tamamen kapatıp yeniden aç. Pencereyi kapatmak yetmez.
+4. Claude uygulamasını tamamen kapatıp yeniden aç: tepsideki simgeye sağ tıkla ve **Çıkış**'ı seç. Pencereyi kapatmak yetmez, uygulama arka planda açık kalır. Gerçekten kapandığını Görev Yöneticisi'nde Claude kalmamasından anlayabilirsin.
 5. Hesapların hepsine bu bilgisayarda en az bir kez giriş yap. Bir hesaba ilk kez giriş yaptıysan bir kez daha çıkış yapıp gir. O hesabın klasörü ilk girişte oluşur ve izleyici onu birkaç saniye içinde öbür klasörlerle eşitler.
 
 ### `kur.ps1` neler yapar
@@ -93,6 +93,14 @@ powershell -NoProfile -ExecutionPolicy Bypass -File "%USERPROFILE%\Claude-hesap-
 Sonra `%USERPROFILE%\Claude-hesap-esitleme\esitleme.log` dosyasını oku.
 
 Uygulamanın kendi günlüğünde (`%LOCALAPPDATA%\Claude\logs\main.log`) `Failed to save session` satırı varsa, uygulama kayıtları diske yazamıyor demektir. Önce bu satırı ara.
+
+Bir oturumda her mesaj "Bir şeyler ters gitti" ile bitiyorsa aynı günlükte `not recreating its worktree` satırını ara. Varsa worktree kiralaması ya da çapası bozuktur. Betik bunu uygulama kapalıyken kendiliğinden düzeltir. Uygulamayı tepsiden **Çıkış** ile kapat, 30 saniye bekle ve yeniden aç. Uygulama açıkken düzeltmek için:
+
+```bash
+powershell -NoProfile -ExecutionPolicy Bypass -File "%USERPROFILE%\Claude-hesap-esitleme\hesap-oturum-esitle.ps1" -ZorlaDuzelt
+```
+
+Bu düzeltme de uygulama tepsiden kapatılıp açılınca geçerli olur.
 
 İzleyicinin çalıştığını görmek için:
 
