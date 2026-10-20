@@ -10,7 +10,7 @@
       4. ~/.claude/settings.json içine SessionStart kancasını ekler; öteki ayarlara ve kancalara dokunmaz, kanca varsa çoğaltmaz.
       5. ~/.claude/CLAUDE.md içine "Claude Account Switching" maddesini bu bilgisayarın yollarıyla yazar; madde varsa yeniler.
       6. Windows oturum açılışında çalışan zamanlanmış görevi kurar.
-      7. Eşitlemeyi önce kuru, sonra gerçek olarak çalıştırır.
+      7. Eşitlemeyi önce kuru, sonra gerçek olarak çalıştırır; gerçek çalıştırma arka plan izleyicisini de başlatır.
     Bir adım hata verirse o ana kadar değişen dosyalar yedekten geri yüklenir; kurulum yarım kalmaz.
     Her adım ekrana ve Claude-hesap-esitleme\kurulum.log dosyasına yazılır.
 
@@ -18,8 +18,9 @@
     Hiçbir şeyi değiştirmeden yapılacakları gösterir.
 
 .PARAMETER Kaldir
-    Kancayı, CLAUDE.md maddesini ve zamanlanmış görevi kaldırır. Oturum klasörlerindeki bağlantılara ve
-    kayıtlara dokunmaz (kaldırmak oturumları yeniden gizler); betik ve yedekler yerinde kalır.
+    Kancayı, CLAUDE.md maddesini ve zamanlanmış görevi kaldırır, arka plan izleyicisini durdurur. Oturum
+    klasörlerindeki kayıtlara dokunmaz (her hesap klasörü o ana kadar eşitlenmiş kayıtları tutar); betik ve
+    yedekler yerinde kalır.
 
 .PARAMETER GorevKurma
     Zamanlanmış görevi kurmaz.
@@ -327,6 +328,22 @@ function Ayarla-Gorev {
     Yaz 'Zamanlanmis gorev kuruldu (Windows oturum acilisinda calisir).'
 }
 
+function Durdur-Izleyici {
+    <#
+    .SYNOPSIS
+        Eşitleme betiğinin arka plan izleyicisini (-Izle) çalışıyorsa durdurur.
+    #>
+    $surecler = @(Get-CimInstance Win32_Process -Filter "Name='powershell.exe'" | Where-Object {
+        $_.CommandLine -match [regex]::Escape($BetikAdi) -and $_.CommandLine -match '-Izle'
+    })
+    if ($surecler.Count -eq 0) { Yaz 'Arka plan izleyicisi zaten calismiyor.'; return }
+    if ($Deneme) { Yaz "Arka plan izleyicisi durdurulacak (PID $(($surecler | ForEach-Object { $_.ProcessId }) -join ', '))."; return }
+    foreach ($s in $surecler) {
+        Stop-Process -Id $s.ProcessId -Force
+        Yaz "Arka plan izleyicisi durduruldu (PID $($s.ProcessId))."
+    }
+}
+
 function Calistir-Esitleme {
     <#
     .SYNOPSIS
@@ -380,7 +397,8 @@ try {
         Guncelle-Ayar -KaldirMi $true
         Guncelle-ClaudeMd -KaldirMi $true
         if (-not $GorevKurma) { Ayarla-Gorev -KaldirMi $true }
-        Yaz "Kaldirma bitti. Betik, gunluk ve yedekler yerinde birakildi: $Hedef. Oturum klasorlerindeki baglantilara dokunulmadi."
+        Durdur-Izleyici
+        Yaz "Kaldirma bitti. Betik, gunluk ve yedekler yerinde birakildi: $Hedef. Oturum klasorlerindeki kayitlara dokunulmadi."
     }
     else {
         Kopyala-Betik
