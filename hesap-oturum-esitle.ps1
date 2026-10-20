@@ -21,9 +21,12 @@
       6. Sohbet dökümü (~/.claude/projects/*.jsonl) duran ama liste kaydı hiç yazılmamış masaüstü oturumlarını
          bulur, etkin klasörü yedekler ve eksik liste kaydını dökümden üretir. Son 15 dakikada açılan oturumlara
          ve uygulama günlüğüne göre başka bir oturuma ait eski CLI kimliklerine dokunmaz.
-      7. Hesaba göre ayrı tutulan iki düz ayar dosyasını eşitler (yalnız uygulama kapalıyken; açıkken uygulama
+      7. Dökümden üretilmiş worktree kayıtlarına eksik worktree çapasını (gitAnchors) ekler (yalnız uygulama
+         kapalıyken). Bunlar yoksa uygulama worktree'yi yeniden kurmaya çalışır ve
+         "branch is checked out somewhere else" hatasıyla mesaj gönderemez.
+      8. Hesaba göre ayrı tutulan iki düz ayar dosyasını eşitler (yalnız uygulama kapalıyken; açıkken uygulama
          dosyayı kendi belleğindeki hâliyle yeniden yazar ve ekleme kaybolur).
-      8. Arka planda izleyiciyi başlatır: izleyici 15 saniyede bir klasörleri eşitler, 10 dakikada bir onarım
+      9. Arka planda izleyiciyi başlatır: izleyici 15 saniyede bir klasörleri eşitler, 10 dakikada bir onarım
          ve ayar eşitlemesi yapar. Böylece hesap değiştirildiği anda öteki hesabın klasörü zaten güncel olur.
     Kenar çubuğu özel grupları uygulamanın Local Storage (leveldb) deposundadır; betik bunlara dokunmaz.
     Hiçbir dosya silinmez. Her çalıştırma idempotenttir; yapacak iş yoksa hiçbir şey değiştirmez.
@@ -41,6 +44,9 @@
 .PARAMETER Izle
     Arka plan izleyicisi olarak sürekli çalışır (tek kopya). Normalde betik bunu kendisi başlatır.
 
+.PARAMETER ZorlaDuzelt
+    Eksik worktree çapası düzeltmesini uygulama açıkken de yapar. Düzeltme uygulama yeniden açılınca geçerli olur.
+
 .NOTES
     Günlük: %USERPROFILE%\Claude-hesap-esitleme\esitleme.log
     Durum:  %USERPROFILE%\Claude-hesap-esitleme\durum.json (son görülen veri klasörleri)
@@ -50,7 +56,8 @@ param(
     [switch]$KuruCalisma,
     [switch]$Bildir,
     [switch]$GorevKur,
-    [switch]$Izle
+    [switch]$Izle,
+    [switch]$ZorlaDuzelt
 )
 
 $ErrorActionPreference = 'Stop'
@@ -556,10 +563,16 @@ function Onar-EksikKayitlar {
             $kayit.worktreeName = $agacAdi
             $kayit.sourceBranch = 'main'
         }
+        $capaListesi = New-Object System.Collections.Generic.List[object]
         if ($capalar.ContainsKey($kokYol)) {
-            $kayit.gitAnchors = $capalar[$kokYol]
-            $kayit.gitAnchorsLookupOnly = $true
+            foreach ($c in @($capalar[$kokYol])) { if ($c -and $c.gitRoot -eq $kokYol) { $capaListesi.Add($c) } }
         }
+        if ($agacAdi) {
+            # Uygulama worktree'yi kendi oturumuna ait saymak için worktree çapasını arar; yoksa yeniden kurmaya çalışır
+            $agacCapasi = Get-WorktreeCapasi -Yol $ozet.cwd
+            if ($agacCapasi) { $capaListesi.Add($agacCapasi) }
+        }
+        if ($capaListesi.Count -gt 0) { $kayit.gitAnchors = [object[]]$capaListesi.ToArray() }
         if ($ozet.dal) { $kayit.branch = $ozet.dal }
         $kayit.createdAt      = $ilkMs
         $kayit.lastActivityAt = $sonMs
@@ -593,6 +606,92 @@ function Onar-EksikKayitlar {
         $script:YenidenAcGerekli = $true
     }
     return $onarilan
+}
+
+function Get-WorktreeCapasi {
+    <#
+    .SYNOPSIS
+        Bir worktree klasörü için uygulamanın beklediği gitAnchors girdisini üretir; worktree değilse $null.
+    .DESCRIPTION
+        Worktree klasöründeki .git dosyası "gitdir: <depo>\.git\worktrees\<ad>" satırını taşır. Uygulamanın
+        yazdığı çapa { gitRoot, commonDir, gitDir, trustedAt } alanlarından oluşur.
+    #>
+    param([string]$Yol)
+    $gitDosyasi = Join-Path $Yol '.git'
+    if (-not (Test-Path -LiteralPath $gitDosyasi -PathType Leaf)) { return $null }
+    $satir = (Get-Content -LiteralPath $gitDosyasi -TotalCount 1)
+    if ($satir -notmatch '^gitdir:\s*(.+)$') { return $null }
+    $gitDir = $Matches[1].Trim().Replace('/', '\')
+    $commonDir = Split-Path (Split-Path $gitDir -Parent) -Parent
+    return [pscustomobject][ordered]@{
+        gitRoot   = $Yol
+        commonDir = $commonDir
+        gitDir    = $gitDir
+        trustedAt = [DateTimeOffset]::Now.ToUnixTimeMilliseconds()
+    }
+}
+
+function Duzelt-WorktreeKayitlari {
+    <#
+    .SYNOPSIS
+        Worktree oturumlarının liste kayıtlarına eksik worktree çapasını ekler, eski hata izini temizler.
+    .DESCRIPTION
+        Dökümden üretilen eski kayıtlarda worktree çapası yoktu. Uygulama o zaman worktree'yi yeniden kurmaya
+        çalışıyor, dal zaten o worktree'de açık olduğu için "branch is checked out somewhere else" hatası
+        veriyor ve mesaj gönderilemiyordu. Bu adım yalnızca uygulama kapalıyken çalışır; açıkken uygulama
+        kaydı belleğindeki hâliyle yeniden yazar. Düzeltilen kayıt yeni değişme zamanı aldığı için eşitleme
+        onu öteki hesap klasörlerine yayar. Yazmadan önce kayıt yedeklenir.
+    .OUTPUTS
+        Düzeltilen kayıt sayısı.
+    #>
+    param([string]$Klasor)
+    if (-not $Klasor) { return 0 }
+    if (-not $ZorlaDuzelt -and (Test-UygulamaAcik)) { return 0 }
+    $duzeltilen = 0
+    $utf8 = New-Object System.Text.UTF8Encoding($false)
+    foreach ($dosya in @(Get-ChildItem -LiteralPath $Klasor -File -Filter 'local_*.json')) {
+        try {
+            $j = Get-Content -LiteralPath $dosya.FullName -Raw -Encoding UTF8 | ConvertFrom-Json
+        }
+        catch {
+            Yaz-Gunluk ("Liste kaydi okunamadi: " + $dosya.FullName + " | " + $_.Exception.Message) 'UYARI'
+            continue
+        }
+        $agac = [string]$j.worktreePath
+        if (-not $agac -or -not (Test-Path -LiteralPath $agac)) { continue }
+        $capalar = @($j.gitAnchors | Where-Object { $_ })
+        $capaVar = @($capalar | Where-Object { $_.gitRoot -eq $agac }).Count -gt 0
+        $hataIzi = $j.priorErrorMark -and $j.priorErrorMark.category -eq 'worktree_branch_in_use'
+        if ($capaVar -and -not $hataIzi) { continue }
+        if (-not $capaVar) {
+            $capa = Get-WorktreeCapasi -Yol $agac
+            if (-not $capa) { continue }
+        }
+        if ($KuruCalisma) {
+            Yaz-Gunluk "[KURU] Worktree kaydi duzeltilecek: $($dosya.Name) '$($j.title)'"
+            $duzeltilen++
+            continue
+        }
+        $yedekHedef = Join-Path $YedekKlasor ((Get-Date -Format 'yyMMdd_HHmmss') + '_worktree_oncesi')
+        New-Item -ItemType Directory -Force $yedekHedef | Out-Null
+        Copy-Item -LiteralPath $dosya.FullName -Destination $yedekHedef -Force
+        if (-not $capaVar) {
+            $j | Add-Member -NotePropertyName gitAnchors -NotePropertyValue ([object[]]($capalar + $capa)) -Force
+            if ($j.PSObject.Properties['gitAnchorsLookupOnly']) { $j.PSObject.Properties.Remove('gitAnchorsLookupOnly') }
+        }
+        if ($hataIzi) { $j.PSObject.Properties.Remove('priorErrorMark') }
+        $gecici = Join-Path $Klasor ('.esitle_' + [guid]::NewGuid().ToString('N') + '.tmp')
+        try {
+            [System.IO.File]::WriteAllText($gecici, ($j | ConvertTo-Json -Depth 50 -Compress), $utf8)
+            [System.IO.File]::Replace($gecici, $dosya.FullName, [NullString]::Value)
+        }
+        finally {
+            if (Test-Path -LiteralPath $gecici) { Remove-Item -LiteralPath $gecici -Force }
+        }
+        Yaz-Gunluk "Worktree kaydi duzeltildi: $($dosya.Name) '$($j.title)'. Yedek: $yedekHedef"
+        $duzeltilen++
+    }
+    return $duzeltilen
 }
 
 function Yaz-JsonAtomik {
@@ -753,6 +852,14 @@ function Calistir-Esitleme {
     Denetle-KokTasinmasi -Kokler $kokler
     foreach ($kok in $kokler) {
         $etkinKlasor = Esitle-Kok -Kok $kok
+        try {
+            # Uygulama kapalıyken eksik worktree çapaları düzeltilir ve hemen öteki klasörlere yayılır
+            $duzeltilen = Duzelt-WorktreeKayitlari -Klasor $etkinKlasor
+            if ($duzeltilen -gt 0 -and -not $KuruCalisma) { [void](Esitle-Kok -Kok $kok) }
+        }
+        catch {
+            Yaz-Gunluk ("Worktree kaydi duzeltme hatasi: " + $_.Exception.Message + " | " + $_.ScriptStackTrace) 'HATA'
+        }
         if (-not $Tam) { continue }
         if ($etkinKlasor) {
             try {
@@ -851,7 +958,8 @@ function Calistir-Izleyici {
                 $kilit.Dispose()
             }
             Gonder-Bildirimler
-            Start-Sleep -Seconds $IzlemeSaniye
+            # Uygulama kapalıyken sık bakılır: düzeltmeler uygulama yeniden açılmadan önce yetişsin
+            if (Test-UygulamaAcik) { Start-Sleep -Seconds $IzlemeSaniye } else { Start-Sleep -Seconds 2 }
             if ((Get-Item -LiteralPath $PSCommandPath).LastWriteTimeUtc -ne $surum) {
                 Yaz-Gunluk "Betik degisti; izleyici yeni surumle yeniden baslatiliyor."
                 $yenidenBaslat = $true
