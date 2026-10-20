@@ -23,7 +23,9 @@
          ve uygulama günlüğüne göre başka bir oturuma ait eski CLI kimliklerine dokunmaz.
       7. Dökümden üretilmiş worktree kayıtlarına eksik worktree çapasını (gitAnchors) ekler (yalnız uygulama
          kapalıyken). Bunlar yoksa uygulama worktree'yi yeniden kurmaya çalışır ve
-         "branch is checked out somewhere else" hatasıyla mesaj gönderemez.
+         "branch is checked out somewhere else" hatasıyla mesaj gönderemez. Aynı nedenle uygulamanın worktree
+         defterinde (git-worktrees.json) kaydı olmayan bir oturuma kiralanmış worktree'yi, onu kullanan gerçek
+         oturuma yeniden kiralar; onarımda da defterdeki eski kimliği yeniden kullanır.
       8. Hesaba göre ayrı tutulan iki düz ayar dosyasını eşitler (yalnız uygulama kapalıyken; açıkken uygulama
          dosyayı kendi belleğindeki hâliyle yeniden yazar ve ekleme kaybolur).
       9. Arka planda izleyiciyi başlatır: izleyici 15 saniyede bir klasörleri eşitler, 10 dakikada bir onarım
@@ -521,6 +523,7 @@ function Onar-EksikKayitlar {
     })
     if ($adaylar.Count -eq 0) { return 0 }
     $eskiCli = Get-EskiCliKimlikleri -YerelKimlikler $yerelKimlikler
+    $kiralar = Get-WorktreeKiralari -VeriKlasoru (Get-VeriKlasoruAnadan -Klasor $Ana)
 
     $utf8 = New-Object System.Text.UTF8Encoding($false)
     $yedeklendi = $false
@@ -552,8 +555,15 @@ function Onar-EksikKayitlar {
         $ilkMs = [long]([DateTimeOffset]::Parse($ozet.ilk)).ToUnixTimeMilliseconds()
         $sonMs = [long]([DateTimeOffset]::Parse($ozet.son)).ToUnixTimeMilliseconds()
 
+        # Worktree defteri bu worktree'yi kaydı olmayan bir oturuma kiralamışsa o kimlik yeniden kullanılır;
+        # böylece uygulama worktree'yi bu oturumun sayar ve yeniden kurmaya çalışmaz
+        $yeniKimlik = 'local_' + [guid]::NewGuid().ToString()
+        if ($agacAdi -and $kiralar.ContainsKey($agacAdi)) {
+            $eskiKiraci = $kiralar[$agacAdi]
+            if ($eskiKiraci -match '^local_[0-9a-f-]{36}$' -and -not $yerelKimlikler.Contains($eskiKiraci)) { $yeniKimlik = $eskiKiraci }
+        }
         $kayit = [ordered]@{
-            sessionId      = 'local_' + [guid]::NewGuid().ToString()
+            sessionId      = $yeniKimlik
             cliSessionId   = $cli
             cwd            = $ozet.cwd
             originCwd      = $kokYol
@@ -692,6 +702,96 @@ function Duzelt-WorktreeKayitlari {
         $duzeltilen++
     }
     return $duzeltilen
+}
+
+function Get-VeriKlasoruAnadan {
+    <#
+    .SYNOPSIS
+        <veri>\claude-code-sessions\<hesap>\<kuruluş> yolundan uygulama veri klasörünü (<veri>) döndürür.
+    #>
+    param([string]$Klasor)
+    return (Split-Path (Split-Path (Split-Path $Klasor -Parent) -Parent) -Parent)
+}
+
+function Get-WorktreeKiralari {
+    <#
+    .SYNOPSIS
+        Uygulamanın worktree defterinde (git-worktrees.json) worktree adı -> kiracı oturum kimliği eşlemesini döndürür.
+    #>
+    param([string]$VeriKlasoru)
+    $sonuc = @{}
+    $defter = Join-Path $VeriKlasoru 'git-worktrees.json'
+    if (-not (Test-Path -LiteralPath $defter)) { return $sonuc }
+    try {
+        $j = Get-Content -LiteralPath $defter -Raw -Encoding UTF8 | ConvertFrom-Json
+        foreach ($p in @($j.worktrees.PSObject.Properties)) { if ($p.Value.leasedBy) { $sonuc[$p.Name] = [string]$p.Value.leasedBy } }
+    }
+    catch {
+        Yaz-Gunluk ("Worktree defteri okunamadi: " + $_.Exception.Message) 'UYARI'
+    }
+    return $sonuc
+}
+
+function Duzelt-WorktreeKiralari {
+    <#
+    .SYNOPSIS
+        Worktree defterinde (git-worktrees.json) kaydı olmayan bir oturuma kiralanmış worktree'leri, o worktree'yi
+        kullanan gerçek oturuma yeniden kiralar.
+    .DESCRIPTION
+        Uygulama bir worktree'yi yalnızca leasedBy alanındaki oturumun sayar. Dökümden yeniden üretilen bir oturum
+        yeni kimlik aldığında defter eski kimliği göstermeye devam eder; uygulama worktree'yi yeniden kurmaya
+        çalışır, dal zaten açık olduğu için "branch is checked out somewhere else" hatası verir ve o oturumda
+        mesaj gönderilemez. Yalnızca kiracısının kaydı hiçbir hesap klasöründe olmayan girdiler değiştirilir.
+        Uygulama açıkken çalışmaz (dosyayı belleğinden yeniden yazar); -ZorlaDuzelt bunu aşar. Önce yedek alınır.
+    .OUTPUTS
+        Yeniden kiralanan worktree sayısı.
+    #>
+    param([string]$Kok, [string]$EtkinKlasor)
+    if (-not $EtkinKlasor) { return 0 }
+    if (-not $ZorlaDuzelt -and (Test-UygulamaAcik)) { return 0 }
+    $veri = Split-Path $Kok -Parent
+    $defter = Join-Path $veri 'git-worktrees.json'
+    if (-not (Test-Path -LiteralPath $defter)) { return 0 }
+
+    # Bütün hesap klasörlerindeki oturum kimlikleri ve worktree adı -> oturum eşlemesi
+    $varOlan = New-Object 'System.Collections.Generic.HashSet[string]'
+    Get-ChildItem $Kok -Directory -Force | Where-Object { $_.Name -match $GuidDeseni } | ForEach-Object {
+        Get-ChildItem $_.FullName -Directory -Force | Where-Object { $_.Name -match $GuidDeseni } | ForEach-Object {
+            Get-ChildItem -LiteralPath $_.FullName -File -Filter 'local_*.json' | ForEach-Object { [void]$varOlan.Add($_.BaseName) }
+        }
+    }
+    $agacOturumu = @{}
+    foreach ($dosya in @(Get-ChildItem -LiteralPath $EtkinKlasor -File -Filter 'local_*.json')) {
+        try {
+            $k = Get-Content -LiteralPath $dosya.FullName -Raw -Encoding UTF8 | ConvertFrom-Json
+            if ($k.worktreeName -and -not $k.isArchived) { $agacOturumu[[string]$k.worktreeName] = [string]$k.sessionId }
+        }
+        catch {
+            Yaz-Gunluk ("Liste kaydi okunamadi: " + $dosya.FullName + " | " + $_.Exception.Message) 'UYARI'
+        }
+    }
+
+    $j = Get-Content -LiteralPath $defter -Raw -Encoding UTF8 | ConvertFrom-Json
+    $degisen = New-Object System.Collections.Generic.List[string]
+    foreach ($p in @($j.worktrees.PSObject.Properties)) {
+        $kiraci = [string]$p.Value.leasedBy
+        if (-not $agacOturumu.ContainsKey($p.Name)) { continue }
+        $yeni = $agacOturumu[$p.Name]
+        if ($kiraci -eq $yeni -or ($kiraci -and $varOlan.Contains($kiraci))) { continue }
+        $degisen.Add("$($p.Name): $kiraci -> $yeni")
+        $p.Value.leasedBy = $yeni
+    }
+    if ($degisen.Count -eq 0) { return 0 }
+    if ($KuruCalisma) {
+        foreach ($d in $degisen) { Yaz-Gunluk "[KURU] Worktree yeniden kiralanacak: $d" }
+        return $degisen.Count
+    }
+    $yedekHedef = Join-Path $YedekKlasor ((Get-Date -Format 'yyMMdd_HHmmss') + '_worktree_defteri_oncesi')
+    New-Item -ItemType Directory -Force $yedekHedef | Out-Null
+    Copy-Item -LiteralPath $defter -Destination $yedekHedef -Force
+    Yaz-JsonAtomik -Yol $defter -Nesne $j
+    foreach ($d in $degisen) { Yaz-Gunluk "Worktree yeniden kiralandi: $d. Yedek: $yedekHedef" }
+    return $degisen.Count
 }
 
 function Yaz-JsonAtomik {
@@ -856,6 +956,7 @@ function Calistir-Esitleme {
             # Uygulama kapalıyken eksik worktree çapaları düzeltilir ve hemen öteki klasörlere yayılır
             $duzeltilen = Duzelt-WorktreeKayitlari -Klasor $etkinKlasor
             if ($duzeltilen -gt 0 -and -not $KuruCalisma) { [void](Esitle-Kok -Kok $kok) }
+            [void](Duzelt-WorktreeKiralari -Kok $kok -EtkinKlasor $etkinKlasor)
         }
         catch {
             Yaz-Gunluk ("Worktree kaydi duzeltme hatasi: " + $_.Exception.Message + " | " + $_.ScriptStackTrace) 'HATA'
