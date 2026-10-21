@@ -1,0 +1,59 @@
+name: Bug report
+description: Sessions missing, sync not working, an error, or anything that looks wrong.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting. Please never paste tokens, cookies, or the contents of `config.json`. You can replace your email address and account ids with placeholders.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: What did you do, what did you expect, and what did you see instead?
+    validations:
+      required: true
+  - type: input
+    id: app-version
+    attributes:
+      label: Claude desktop app version
+      description: Shown in the app under Help or About.
+      placeholder: "3.1623.0"
+    validations:
+      required: true
+  - type: dropdown
+    id: build
+    attributes:
+      label: App build
+      options:
+        - Microsoft Store (MSIX)
+        - Direct download
+        - Not sure
+    validations:
+      required: true
+  - type: input
+    id: windows
+    attributes:
+      label: Windows version
+      placeholder: "Windows 11 23H2"
+  - type: textarea
+    id: sync-log
+    attributes:
+      label: Last 30 lines of esitleme.log
+      description: "%USERPROFILE%\\Claude-hesap-esitleme\\esitleme.log"
+      render: text
+    validations:
+      required: true
+  - type: textarea
+    id: app-log
+    attributes:
+      label: Matching lines from the app log
+      description: "Search %LOCALAPPDATA%\\Claude\\logs\\main.log for `Failed to save session`, `not recreating its worktree`, and `Loaded N persisted sessions`."
+      render: text
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Checks
+      options:
+        - label: I fully quit the app from the tray (right-click, Quit) and reopened it before reporting.
+        - label: I ran `hesap-oturum-esitle.ps1 -KuruCalisma` and attached its output or the log above.

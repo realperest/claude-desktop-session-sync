@@ -53,6 +53,9 @@
     Eksik worktree çapası ve worktree kiralama düzeltmelerini uygulama açıkken de yapar. Uygulama bunları
     bellekte tuttuğu için düzeltme, uygulama tepsiden Çıkış ile tamamen kapatılıp açılınca geçerli olur.
 
+.PARAMETER IzleyiciBaslatma
+    Tek bir eşitleme turu çalıştırır, arka plan izleyicisini başlatmaz (otomatik testler için).
+
 .NOTES
     Günlük: %USERPROFILE%\Claude-hesap-esitleme\esitleme.log (5 MB'ı aşınca esitleme_<zaman>.log adıyla saklanır)
     Durum:  %USERPROFILE%\Claude-hesap-esitleme\durum.json (son görülen veri klasörleri)
@@ -63,7 +66,8 @@ param(
     [switch]$Bildir,
     [switch]$GorevKur,
     [switch]$Izle,
-    [switch]$ZorlaDuzelt
+    [switch]$ZorlaDuzelt,
+    [switch]$IzleyiciBaslatma
 )
 
 $ErrorActionPreference = 'Stop'
@@ -1184,5 +1188,5 @@ finally {
     if ($kilitAlindi) { $kilit.ReleaseMutex() }
     $kilit.Dispose()
 }
-if (-not $KuruCalisma) { Baslat-Izleyici }
+if (-not $KuruCalisma -and -not $IzleyiciBaslatma) { Baslat-Izleyici }
 exit 0

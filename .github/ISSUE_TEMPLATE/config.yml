@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Technical findings
+    url: https://github.com/realperest/claude-desktop-session-sync/blob/main/docs/FINDINGS.md
+    about: How the Claude desktop app stores sessions, and known causes of common problems.
+  - name: Upstream issue at Anthropic
+    url: https://github.com/anthropics/claude-code/issues/74662
+    about: The official feature request for keeping sessions across accounts.

@@ -1,136 +1,178 @@
-# CLAUDE_BIRLESTIR
+# Claude Desktop Session Sync
 
-Claude masaüstü uygulamasında (Code sekmesi) birden fazla hesap arasında geçiş yaparken oturum listesinin, sohbet geçmişinin ve ayarların aynı kalmasını sağlar. Hesap değişince yalnızca kullanım limiti değişir.
+**Keep one Code-tab session list across all your Claude accounts in the Claude desktop app on Windows.**
 
-## Ne yapar
+[Türkçe](README.tr.md) · [Technical findings](docs/FINDINGS.md) · [Changelog](CHANGELOG.md) · [Contributing](CONTRIBUTING.md)
 
-Uygulama, Code sekmesindeki oturum listesini her hesap için ayrı bir klasörde tutar:
+> Unofficial. Not affiliated with or endorsed by Anthropic. This tool relies on how the Claude desktop app stores its files today, which is not a published interface. An app update can break it. Read the [disclaimer](#disclaimer) before you use it.
+
+## The problem
+
+If you use more than one Claude account in the desktop app (for example a personal and a work account, or two accounts to spread usage limits), switching accounts makes your **Code** tab sessions disappear from the sidebar. They are not deleted: the conversations are still on disk in `~/.claude/projects`. But the app keeps a separate sidebar list for every account and organization:
 
 ```
-<veri>\claude-code-sessions\<hesapUUID>\<kurulusUUID>\local_*.json
+<app data>\claude-code-sessions\<account id>\<organization id>\local_<session id>.json
 ```
 
-Hesap değişince öbür hesabın oturumları silinmez ama listede görünmez. `hesap-oturum-esitle.ps1` betiği şunları yapar:
+When you sign in to the other account, the app reads the other folder, and your sessions are gone from view. Anthropic has no built-in fix for accounts with different email addresses yet. See [anthropics/claude-code#74662](https://github.com/anthropics/claude-code/issues/74662) and [#48511](https://github.com/anthropics/claude-code/issues/48511).
 
-- **Çift yönlü eşitleme:** Bütün hesap klasörlerini (bir hesap birden fazla kuruluş klasörü kullanabilir) gerçek klasör olarak tutar. Her kayıt dosyasının en yeni sürümünü öbür klasörlere kopyalar. Değiştirilme zamanını koruduğu için kopyalar klasörler arasında gidip gelmez.
-- **Arka plan izleyicisi:** Gizli bir izleyici klasörleri 15 saniyede bir (uygulama kapalıyken 2 saniyede bir) eşitler. 10 dakikada bir de kayıp kayıt onarımı ve ayar eşitlemesi yapar. Böylece hesap değiştirdiğin anda öbür hesabın listesi zaten günceldir. İzleyici tek kopya çalışır ve betik güncellenince kendini yeni sürümle yeniden başlatır. Günlüğe yalnız yeni dosya ya da taşıma olan turları yazar.
-- **Silinen oturumlar geri gelmez:** Bir hesapta silinen oturumun (`deleted_<kimlik>` işareti) öbür klasörlerdeki kopyaları silinmez, `yedek\` klasörüne taşınır. İşaret, uygulamanın yaptığı gibi kaydın bütün kimlikleriyle karşılaştırılır: `cliSessionId`, `unarchivedCliSessionId`, `priorCliSessionIds` ve dosya adındaki kimlik.
-- **Bozuk kayıt yayılmaz:** Kopyanın kaynağı en yeni **geçerli** sürümdür; JSON olarak okunabilmeli ve `sessionId` alanı dosya adıyla aynı olmalı. Yarım yazılmış ya da bozuk bir sürüm hiçbir klasöre kopyalanmaz ve sağlam kopyaların üstüne yazılmaz.
-- **Günlük şişmez:** `esitleme.log` 5 MB'ı aşınca `esitleme_<zaman>.log` adıyla saklanır ve yeni bir günlük başlar.
-- **Kayıp kayıt onarımı:** Sohbet dökümü duran ama listede kaydı olmayan oturumların kaydını dökümden yeniden oluşturur. Silinmiş oturumlar, son 15 dakikada açılan oturumlar ve uygulama günlüğüne göre yaşayan bir oturumun eski kimliği olan dökümler onarılmaz.
-- **Worktree kiralama onarımı:** Uygulama her worktree'yi `git-worktrees.json` defterinde bir oturuma kiralar (`leasedBy`). Dökümden yeniden üretilen bir oturum yeni kimlik alırsa defter eski kimliği gösterir. Uygulama o zaman worktree'yi yeniden kurmaya çalışır, "branch is checked out somewhere else" hatası verir ve o oturumda mesaj gönderilemez ("Bir şeyler ters gitti"). Betik, kiracısının kaydı olmayan worktree'leri onu kullanan gerçek oturuma yeniden kiralar. Onarımda da defterdeki eski kimliği yeniden kullanır. Ayrıca eksik worktree çapasını (`gitAnchors`) ekler. Bunları uygulama kapalıyken yapar; uygulama kapalıyken izleyici 2 saniyede bir bakar. `-ZorlaDuzelt` ile uygulama açıkken de yapar.
-- **Ortak ayarlar:** Kayıtlı ortam ayarlarını (`ccd-session-presets.json`) ve MCP araç seçimlerini (`mcp-user-tool-toggles.json`) iki hesapta aynı yapar. Yalnızca eksik olanı ekler. Uygulama açıkken bu dosyaları kendi belleğinden yeniden yazdığı için bu adım yalnız uygulama kapalıyken çalışır.
-- **Taşınma uyarısı:** Uygulama veri klasörünü taşırsa günlüğe uyarı yazar ve haber verir.
-- **Bağlantı temizliği:** Eski sürümlerin kurduğu NTFS bağlantılarını (junction) gerçek klasöre çevirir.
+## What this does
 
-> **Neden bağlantı (junction) yok:** Uygulamanın yeni sürümleri bağlantı olan klasöre yazmayı reddeder (`Refusing non-directory at private dir path (symlink/file plant)`). Bağlantıdan okuyabildiği için liste normal görünür, ama yeni oturumlar ve değişiklikler diske yazılmaz ve hesap değişince kaybolur. Mesaj gönderirken görülen "Gönderilemedi" hatası da büyük ihtimalle bu yüzdendir. Bu yüzden eşitleme kopyalayarak yapılır.
+A PowerShell script keeps every account and organization folder in sync, so the sidebar shows the same sessions whichever account you sign in to.
 
-Hiçbir dosyayı silmez. Her değişiklikten önce `yedek\` klasörüne yedek alır.
+- **Two-way sync by copying.** The newest valid version of every session record is copied to every other folder. Last-write times are kept, so nothing bounces back and forth. An account can use more than one organization folder; all of them are synced.
+- **Background watcher.** A hidden watcher syncs every 15 seconds (every 2 seconds while the app is closed). When you switch accounts, the other account's list is already up to date, so you do not need to restart the app.
+- **Deleted sessions stay deleted.** When you delete a session, the app writes a `deleted_<id>` marker. The script matches it against every id of a record (`cliSessionId`, `unarchivedCliSessionId`, `priorCliSessionIds`, and the id in the file name) and moves leftover copies to a backup folder instead of deleting them.
+- **Corrupt records never spread.** A half-written or corrupt record is never copied and never overwrites a good copy.
+- **Missing-entry repair.** If a conversation exists on disk but has no sidebar entry (this happens when the app moves its data folder, or when it cannot save), the script rebuilds the entry from the transcript.
+- **Worktree repair.** It fixes worktree sessions whose entry was rebuilt and that fail with *"Something went wrong"* / `branch is checked out somewhere else` (see [findings](docs/FINDINGS.md#worktree-lease)).
+- **Shared settings.** Saved environment presets and MCP tool toggles are merged across accounts, but only while the app is closed.
+- **Safe by design.** It never deletes files, backs up before every change, writes atomically, and never touches account credentials, passwords, or tokens.
 
-## Kurulum
+### Why not just link the folders?
 
-Her bilgisayarda bir kez yapılır. Windows PowerShell 5.1 yeterli; yönetici yetkisi gerekmez.
+Earlier versions linked the account folders with NTFS junctions. **Do not do that.** Current app versions refuse to write into a linked folder (`Refusing non-directory at private dir path (symlink/file plant)` in the app log). The app can still read through the link, so everything looks fine, but new sessions and changes are never saved and are lost at the next account switch or restart. This tool converts any junction it finds back into a real folder. Details in [findings](docs/FINDINGS.md#junctions).
 
-1. Depoyu indir:
+## Requirements
 
-   ```bash
-   git clone https://github.com/realperest/CLAUDE_BIRLESTIR.git
-   ```
+- Windows 10 or 11
+- The Claude desktop app, either the Microsoft Store version or the direct download. It has been tested with the Store (MSIX) version.
+- Windows PowerShell 5.1 (included with Windows). No admin rights are needed.
+- Git, or download the repository as a ZIP file.
 
-2. Önce deneme modunda çalıştır. Hiçbir şey değişmez, yalnızca yapılacaklar gösterilir:
+## Install
 
-   ```bash
-   powershell -NoProfile -ExecutionPolicy Bypass -File .\CLAUDE_BIRLESTIR\kur.ps1 -Deneme
-   ```
-
-3. Kur:
+1. **Get the files.**
 
    ```bash
-   powershell -NoProfile -ExecutionPolicy Bypass -File .\CLAUDE_BIRLESTIR\kur.ps1
+   git clone https://github.com/realperest/claude-desktop-session-sync.git
    ```
 
-4. Claude uygulamasını tamamen kapatıp yeniden aç: tepsideki simgeye sağ tıkla ve **Çıkış**'ı seç. Pencereyi kapatmak yetmez, uygulama arka planda açık kalır. Gerçekten kapandığını Görev Yöneticisi'nde Claude kalmamasından anlayabilirsin.
-5. Hesapların hepsine bu bilgisayarda en az bir kez giriş yap. Bir hesaba ilk kez giriş yaptıysan bir kez daha çıkış yapıp gir. O hesabın klasörü ilk girişte oluşur ve izleyici onu birkaç saniye içinde öbür klasörlerle eşitler.
+   Or click **Code > Download ZIP** on GitHub and extract it.
 
-### `kur.ps1` neler yapar
+2. **Do a dry run.** Nothing is changed; the installer only lists what it would do.
 
-1. Kullanıcı klasörünü ve Claude veri klasörünü bulur.
-2. `settings.json` dosyasını, `CLAUDE.md` dosyasını ve varsa eski betiği `Claude-hesap-esitleme\yedek\kurulum_<zaman>\` klasörüne yedekler.
-3. Eşitleme betiğini `%USERPROFILE%\Claude-hesap-esitleme\` klasörüne kopyalar.
-4. `~/.claude/settings.json` dosyasına SessionStart kancasını ekler. Öteki ayarlara dokunmaz, kanca varsa ikinci kez eklemez.
-5. `~/.claude/CLAUDE.md` dosyasına bu bilgisayarın yollarıyla "Claude Account Switching" maddesini yazar. Madde varsa yeniler.
-6. Windows oturum açılışında çalışan zamanlanmış görevi kurar.
-7. Eşitlemeyi önce kuru, sonra gerçek olarak çalıştırır. Gerçek çalıştırma arka plan izleyicisini de başlatır.
+   ```bash
+   powershell -NoProfile -ExecutionPolicy Bypass -File .\claude-desktop-session-sync\kur.ps1 -Deneme
+   ```
 
-Bir adım hata verirse o ana kadar yapılan değişiklikleri yedekten geri alır ve durur. Her adım ekrana ve `Claude-hesap-esitleme\kurulum.log` dosyasına yazılır.
+3. **Install.**
 
-### Seçenekler
+   ```bash
+   powershell -NoProfile -ExecutionPolicy Bypass -File .\claude-desktop-session-sync\kur.ps1
+   ```
 
-| Seçenek | Açıklama |
+4. **Fully quit and reopen the Claude app.** Right-click the Claude icon in the system tray and choose **Quit**. Closing the window is not enough; the app keeps running in the background. Check Task Manager to confirm that no Claude process is left.
+
+5. **Sign in to each of your accounts at least once on this computer.** An account's folder is created on its first sign-in, and the watcher syncs it within seconds.
+
+### What the installer does
+
+1. Finds your user folder and the Claude data folder.
+2. Backs up `~/.claude/settings.json`, `~/.claude/CLAUDE.md`, and any older copy of the script to `%USERPROFILE%\Claude-hesap-esitleme\yedek\kurulum_<time>\`.
+3. Copies the sync script to `%USERPROFILE%\Claude-hesap-esitleme\`.
+4. Adds a `SessionStart` hook to `~/.claude/settings.json`, so the script runs whenever a Claude Code session starts. Your other settings and hooks are left untouched, and the hook is never added twice.
+5. Adds a short section to `~/.claude/CLAUDE.md` that explains the setup to Claude, using this computer's paths. If the section exists, it is updated.
+6. Registers a Windows scheduled task that runs the script at logon, before the app starts.
+7. Runs the sync once as a dry run and once for real. The real run also starts the background watcher.
+
+If any step fails, everything changed up to that point is restored from the backup. Every step is logged to the screen and to `%USERPROFILE%\Claude-hesap-esitleme\kurulum.log`.
+
+### Installer options
+
+| Option | What it does |
 |---|---|
-| `-Deneme` | Hiçbir şeyi değiştirmeden yapılacakları gösterir. |
-| `-Kaldir` | Kancayı, `CLAUDE.md` maddesini ve zamanlanmış görevi kaldırır, arka plan izleyicisini durdurur. Betik, günlük ve yedekler yerinde kalır. |
-| `-GorevKurma` | Zamanlanmış görevi kurmaz ya da kaldırmaz. |
-| `-EsitlemeAtla` | Kurulumdan sonra eşitlemeyi çalıştırmaz. |
-| `-KullaniciKlasoru <yol>` | Başka bir kullanıcı klasörüne kurar (deneme için). |
+| `-Deneme` | Dry run: shows what would happen and changes nothing. |
+| `-Kaldir` | Uninstall: removes the hook, the `CLAUDE.md` section, and the scheduled task, and stops the watcher. The script, logs, and backups stay in place. |
+| `-GorevKurma` | Does not install or remove the scheduled task. |
+| `-EsitlemeAtla` | Does not run the sync after installing. |
+| `-KullaniciKlasoru <path>` | Installs into another user folder (for testing). |
 
-`-Kaldir`, oturum klasörlerindeki kayıtlara dokunmaz. Her hesap klasörü o ana kadar eşitlenmiş kayıtları tutar, ama sonraki değişiklikler artık öbür hesaba geçmez. Eski sürümlerden kalan klasörler `<ad>_eski_<zaman>` adıyla, yedekler de `yedek\` altında durur.
+Uninstalling does not touch your session records. Each account folder keeps what was synced up to that point; later changes just stop being shared.
 
-## Güncelleme
-
-Depoyu güncelleyip `kur.ps1` dosyasını yeniden çalıştır. Kurulum tekrar çalıştırılabilir: değişmeyen dosyalara dokunmaz, kancayı çoğaltmaz, `CLAUDE.md` maddesini yeniler.
+## Update
 
 ```bash
-git -C .\CLAUDE_BIRLESTIR pull
+git -C .\claude-desktop-session-sync pull
 ```
 
-## Sorun giderme
+```bash
+powershell -NoProfile -ExecutionPolicy Bypass -File .\claude-desktop-session-sync\kur.ps1
+```
 
-Hesap değiştirince oturumlar eksikse, önce değişiklik yapmadan neler olacağına bak:
+The installer can be run again at any time. It leaves unchanged files alone, never duplicates the hook, and refreshes the `CLAUDE.md` section. A running watcher notices the new script and restarts itself.
+
+## Everyday use
+
+- **Switching accounts:** let any running reply finish, sign out, sign in to the other account, and check the sidebar. No restart is needed.
+- **If something is missing after a switch:** fully quit the app from the tray and reopen it.
+- **Script commands** (run from `%USERPROFILE%\Claude-hesap-esitleme\`):
+
+| Command | What it does |
+|---|---|
+| `hesap-oturum-esitle.ps1 -KuruCalisma` | Dry run: logs what would change, changes nothing. |
+| `hesap-oturum-esitle.ps1` | One full sync and repair run, then starts the watcher if it is not running. |
+| `hesap-oturum-esitle.ps1 -ZorlaDuzelt` | Runs the worktree fixes even while the app is open. They take effect after a full restart. |
+| `hesap-oturum-esitle.ps1 -GorevKur` | Installs or refreshes the logon task. |
+
+## Troubleshooting
+
+Start with a dry run and read the log:
 
 ```bash
 powershell -NoProfile -ExecutionPolicy Bypass -File "%USERPROFILE%\Claude-hesap-esitleme\hesap-oturum-esitle.ps1" -KuruCalisma
 ```
 
-Sonra `%USERPROFILE%\Claude-hesap-esitleme\esitleme.log` dosyasını oku.
+The log is `%USERPROFILE%\Claude-hesap-esitleme\esitleme.log`. When it passes 5 MB, it is renamed to `esitleme_<time>.log` and a new one starts. Backups are in `%USERPROFILE%\Claude-hesap-esitleme\yedek\`.
 
-Uygulamanın kendi günlüğünde (`%LOCALAPPDATA%\Claude\logs\main.log`) `Failed to save session` satırı varsa, uygulama kayıtları diske yazamıyor demektir. Önce bu satırı ara.
+| Symptom | What to check |
+|---|---|
+| New sessions vanish after a switch or restart | Search the app log `%LOCALAPPDATA%\Claude\logs\main.log` for `Failed to save session`. If you see `symlink/file plant`, a folder is still a junction; run the script once. |
+| Every message in one session ends with "Something went wrong" | Search the app log for `not recreating its worktree`. Quit the app from the tray, wait 30 seconds, and reopen it; the watcher repairs the entry while the app is closed. |
+| A project appears twice in the sidebar | There is probably a manually created sidebar group with the same name as the project. Delete that group in the app; its sessions are not deleted. |
+| Orange "needs input" dots come back after every account switch | This is app behavior, not caused by this tool. See [findings](docs/FINDINGS.md#orange-dots). |
+| A fix does not seem to apply | Make sure the app really restarted: a new `Loaded N persisted sessions` line must appear in the app log. |
 
-Bir oturumda her mesaj "Bir şeyler ters gitti" ile bitiyorsa aynı günlükte `not recreating its worktree` satırını ara. Varsa worktree kiralaması ya da çapası bozuktur. Betik bunu uygulama kapalıyken kendiliğinden düzeltir. Uygulamayı tepsiden **Çıkış** ile kapat, 30 saniye bekle ve yeniden aç. Uygulama açıkken düzeltmek için:
-
-```bash
-powershell -NoProfile -ExecutionPolicy Bypass -File "%USERPROFILE%\Claude-hesap-esitleme\hesap-oturum-esitle.ps1" -ZorlaDuzelt
-```
-
-Bu düzeltme de uygulama tepsiden kapatılıp açılınca geçerli olur.
-
-İzleyicinin çalıştığını görmek için:
+To check that the watcher is running:
 
 ```bash
 powershell -NoProfile -Command "Get-CimInstance Win32_Process -Filter \"Name='powershell.exe'\" | Where-Object CommandLine -match '-Izle' | Select-Object ProcessId,CreationDate"
 ```
 
-Kenar çubuğunda aynı proje iki grup olarak görünüyorsa, sebep büyük ihtimalle elle oluşturulmuş ve projeyle aynı adı taşıyan özel bir gruptur. Bu gruplar uygulamanın kendi deposunda durduğu için betik onlara dokunmaz. Grubu uygulamadan sil ya da Claude'dan silmesini iste. Oturumlar silinmez, projeye göre gruplanır.
+When you open an issue, include the last 30 lines of `esitleme.log`, your Claude app version, and whether you use the Store or the direct-download app. Do not paste tokens or the contents of `config.json`.
 
-## Hesap değiştirmeden iki hesabı kullanmak
+## Using two accounts without switching
 
-Masaüstü uygulamasının girişi ile Claude Code'un terminal ve VS Code/Cursor eklentisi girişi birbirinden bağımsızdır. Resmi belgeye göre eklenti ve terminal aynı konuşma geçmişini paylaşır ve bu geçmiş bilgisayarda, hesaptan bağımsız durur. Bu yüzden hiç hesap değiştirmeden iki hesabı birlikte kullanabilirsin: masaüstü uygulamasını bir hesapta, eklentiyi ya da terminali öbür hesapta tut. Bunun bedeli, iki tarafın ayrı oturum listeleri tutmasıdır.
+The desktop app's sign-in is separate from the sign-in of Claude Code in the terminal and in the VS Code or Cursor extension. According to the [official docs](https://code.claude.com/docs/en/vs-code), the extension and the CLI share the same conversation history, which is stored locally and is not tied to an account. So you can keep the desktop app signed in to one account and the extension or terminal signed in to the other, and never switch. The trade-off is that each side keeps its own session list.
 
-## Gelecek: uygulama içi çoklu hesap
+## The future: built-in multi-account
 
-Masaüstü uygulamasının kodunda, Anthropic'in sunucu tarafında açtığı bir anahtara bağlı bir çoklu hesap özelliği bulunuyor (kurumsal ilkesi `disableMultiAccount`, "Single account only"). Özellik kademeli olarak açılıyor. Zorla açmaya çalışma. Hesap menüsünde başka hesap ekleme seçeneği belirdiğinde bu betiğe hâlâ gerek olup olmadığını yeniden değerlendir.
+The desktop app already contains a multi-account feature behind a server-side flag. It also has an organization policy, `disableMultiAccount` ("Single account only"). Anthropic appears to be rolling the feature out gradually. Do not try to force it on. When you see an option to add another account in the account menu, check whether you still need this tool.
 
-## Sınırlar
+## What is not shared
 
-- **Bilgisayar başına çalışır.** Bilgisayarlar arasında oturum eşitlemez. Sohbet dökümleri ve worktree'ler her bilgisayarın kendi diskinde durur.
-- **Ortak olmayanlar:** Kenar çubuğu özel grupları ve sabitlemeler, claude.ai bağlayıcıları, claude.ai skill'leri ve eklentileri, bulut oturumları ve arka plan ajan oturumları her hesapta ayrı kalır.
-- **Resmi değil.** Uygulamanın belgelenmemiş klasör yapısına dayanır. Bir uygulama güncellemesi yapıyı değiştirirse betik güncellenmelidir.
-- **Hesap bilgisi yok.** Betik hiçbir hesap bilgisine, şifreye ya da jetona dokunmaz.
+- Sidebar custom groups and pins
+- The "Mark as completed" state of sidebar dots
+- claude.ai connectors, skills, and plugins
+- Cloud sessions and background agent sessions
+- Anything on another computer. This tool works per computer, because transcripts and worktrees live on each computer's own disk.
 
-## Dosyalar
+## Files
 
-| Dosya | Görev |
+| File | Purpose |
 |---|---|
-| `hesap-oturum-esitle.ps1` | Eşitleme betiği. SessionStart kancası ve zamanlanmış görev bunu çalıştırır. Arka plan izleyicisi aynı betiğin `-Izle` modudur. |
-| `kur.ps1` | Kurulum ve kaldırma betiği. |
-| `sablon/claude-md-bolum.md` | `CLAUDE.md` dosyasına yazılan maddenin şablonu. |
+| `hesap-oturum-esitle.ps1` | The sync script. The hook, the logon task, and the watcher (`-Izle`) all run this file. |
+| `kur.ps1` | Installer and uninstaller. |
+| `sablon/claude-md-bolum.md` | Template of the section written into `~/.claude/CLAUDE.md`. |
+| `tests/Test-Sync.ps1` | End-to-end test on a fake data folder. It never touches your real Claude data. |
+| `docs/FINDINGS.md` | How the desktop app stores sessions, and what we learned while building this. |
+
+The scripts' internal names, log messages, and comments are in Turkish, because the project started as a personal tool. Contributions that translate them are welcome.
+
+## Disclaimer
+
+This is an unofficial tool. It is not affiliated with, endorsed by, or supported by Anthropic. It reads and writes files in the Claude desktop app's data folder whose format is undocumented and may change without notice. The tool makes backups before every change and never deletes files, but you use it at your own risk. Keep your own backups of `%LOCALAPPDATA%\Claude-Data` (or `%APPDATA%\Claude`) and `%USERPROFILE%\.claude\projects`.
+
+## License
+
+[MIT](LICENSE)

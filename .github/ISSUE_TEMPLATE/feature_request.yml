@@ -1,0 +1,21 @@
+name: Feature request or idea
+description: Suggest an improvement, support for another setup, or share a finding about the app.
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: idea
+    attributes:
+      label: What would you like?
+      description: Describe the problem it solves for you.
+    validations:
+      required: true
+  - type: textarea
+    id: setup
+    attributes:
+      label: Your setup
+      description: App version, Store or direct download, number of accounts and organizations, anything unusual.
+  - type: textarea
+    id: notes
+    attributes:
+      label: Anything else
+      description: Links, log lines, findings about how the app stores data.
