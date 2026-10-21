@@ -16,8 +16,10 @@
       3. Eski sürümün kurduğu bağlantıları gerçek klasöre çevirir.
       4. Bütün hesap/kuruluş klasörlerini çift yönlü eşitler: her kayıt dosyasının en yeni sürümü öteki
          klasörlere kopyalanır (değiştirilme zamanı korunur, gidip gelme olmaz).
-      5. Kullanıcının sildiği oturumları (deleted_<cliSessionId> işareti) bütün klasörlere yayar; silinen
-         oturumun kalan kopyalarını silmez, yedek klasörüne taşır.
+      5. Kullanıcının sildiği oturumları (deleted_<kimlik> işareti) bütün klasörlere yayar; silinen
+         oturumun kalan kopyalarını silmez, yedek klasörüne taşır. İşaret, kaydın bütün kimlikleriyle
+         (cliSessionId, unarchivedCliSessionId, priorCliSessionIds, dosya adı) karşılaştırılır.
+         Bozuk ya da yarım yazılmış bir kayıt (sessionId dosya adıyla uyuşmuyor) hiçbir klasöre kopyalanmaz.
       6. Sohbet dökümü (~/.claude/projects/*.jsonl) duran ama liste kaydı hiç yazılmamış masaüstü oturumlarını
          bulur, etkin klasörü yedekler ve eksik liste kaydını dökümden üretir. Son 15 dakikada açılan oturumlara
          ve uygulama günlüğüne göre başka bir oturuma ait eski CLI kimliklerine dokunmaz.
@@ -52,7 +54,7 @@
     bellekte tuttuğu için düzeltme, uygulama tepsiden Çıkış ile tamamen kapatılıp açılınca geçerli olur.
 
 .NOTES
-    Günlük: %USERPROFILE%\Claude-hesap-esitleme\esitleme.log
+    Günlük: %USERPROFILE%\Claude-hesap-esitleme\esitleme.log (5 MB'ı aşınca esitleme_<zaman>.log adıyla saklanır)
     Durum:  %USERPROFILE%\Claude-hesap-esitleme\durum.json (son görülen veri klasörleri)
     Yedekler: %USERPROFILE%\Claude-hesap-esitleme\yedek\
 #>
@@ -87,6 +89,9 @@ $TamEsitlemeDakika = 10
 $script:Bildirimler = New-Object System.Collections.Generic.List[string]
 $script:YenidenAcGerekli = $false
 $script:CliOnbellek = @{}
+$script:UyarilanBozuk = New-Object 'System.Collections.Generic.HashSet[string]'
+# Günlük bu boyutu aşınca tarihli bir dosyaya taşınır (silinmez)
+$GunlukSiniri = 5MB
 
 function Yaz-Gunluk {
     <#
@@ -96,6 +101,17 @@ function Yaz-Gunluk {
     param([string]$Mesaj, [string]$Seviye = 'BILGI')
     $satir = '{0} [{1}] {2}' -f (Get-Date -Format 'dd.MM.yyyy HH:mm:ss'), $Seviye, $Mesaj
     if (-not (Test-Path $KokKlasor)) { New-Item -ItemType Directory -Force $KokKlasor | Out-Null }
+    # Günlük sınırı aşınca tarihli dosyaya taşınır; eski günlükler silinmez
+    $mevcut = Get-Item -LiteralPath $GunlukDosya -ErrorAction SilentlyContinue
+    if ($mevcut -and $mevcut.Length -gt $GunlukSiniri) {
+        try {
+            Rename-Item -LiteralPath $GunlukDosya -NewName ('esitleme_' + (Get-Date -Format 'yyMMdd_HHmmss') + '.log')
+        }
+        catch {
+            # Günlük taşınamadıysa (başka süreç yazıyor) mevcut dosyaya yazmaya devam edilir; hata konsola bildirilir
+            [Console]::Error.WriteLine("Gunluk tasinamadi: " + $_.Exception.Message)
+        }
+    }
     Add-Content -Path $GunlukDosya -Value $satir -Encoding UTF8
     # Fonksiyon dönüş değerlerini kirletmemek için çıktı hattı yerine doğrudan konsola yazılır
     if ($KuruCalisma) { [Console]::WriteLine($satir) }
@@ -175,6 +191,8 @@ function Denetle-KokTasinmasi {
         $script:YenidenAcGerekli = $true
     }
     if (-not $KuruCalisma -and ($fark -or $onceki.Count -eq 0)) {
+        # İlk çalıştırmada betik klasörü henüz olmayabilir
+        if (-not (Test-Path $KokKlasor)) { New-Item -ItemType Directory -Force $KokKlasor | Out-Null }
         $metin = [ordered]@{ kokler = $simdiki; guncelleme = (Get-Date -Format 'dd.MM.yyyy HH:mm:ss') } | ConvertTo-Json
         [System.IO.File]::WriteAllText($DurumDosya, $metin, (New-Object System.Text.UTF8Encoding($false)))
     }
@@ -233,26 +251,53 @@ function Get-EtkinKlasor {
     return $enYeni
 }
 
-function Get-CliKimligi {
+function Get-KayitKimlikleri {
     <#
     .SYNOPSIS
-        Bir liste kaydının cliSessionId alanını döndürür; dosya yolu ve değişme zamanına göre önbelleğe alır.
+        Bir liste kaydı nesnesinin ve dosya adının taşıdığı bütün oturum kimliklerini döndürür.
+    .DESCRIPTION
+        Uygulama bir kaydı cliSessionId, unarchivedCliSessionId ve priorCliSessionIds alanlarıyla tanır;
+        CLI'dan içe aktarılan oturumlarda dosya adı (local_<kimlik>.json) da kimliktir. Silme işaretleri
+        (deleted_<kimlik>) ve onarım bu kümenin hepsine bakar.
+    #>
+    param($Kayit, [string]$DosyaAdi)
+    $kimlikler = New-Object System.Collections.Generic.List[string]
+    if ($Kayit) {
+        if ($Kayit.cliSessionId) { $kimlikler.Add([string]$Kayit.cliSessionId) }
+        if ($Kayit.unarchivedCliSessionId) { $kimlikler.Add([string]$Kayit.unarchivedCliSessionId) }
+        foreach ($k in @($Kayit.priorCliSessionIds)) { if ($k) { $kimlikler.Add([string]$k) } }
+    }
+    if ($DosyaAdi -match '^local_(.+)\.json$') { $kimlikler.Add($Matches[1]) }
+    return ,$kimlikler
+}
+
+function Get-KayitBilgisi {
+    <#
+    .SYNOPSIS
+        Bir liste kaydının geçerli olup olmadığını ve bütün kimliklerini döndürür; yol ve değişme zamanına göre önbelleğe alır.
+    .DESCRIPTION
+        Geçerli kayıt: JSON olarak okunur ve sessionId alanı dosya adıyla aynıdır. Yarım yazılmış ya da bozuk
+        bir kayıt, en yeni sürüm olsa bile öteki klasörlere kopyalanmaz; böylece sağlam kopyaların üstüne yazılmaz.
+    .OUTPUTS
+        @{ Gecerli = [bool]; Kimlikler = List[string] }
     #>
     param([System.IO.FileInfo]$Dosya)
     $anahtar = $Dosya.FullName + '|' + $Dosya.LastWriteTimeUtc.Ticks
     if ($script:CliOnbellek.ContainsKey($anahtar)) { return $script:CliOnbellek[$anahtar] }
     if ($script:CliOnbellek.Count -gt 2000) { $script:CliOnbellek.Clear() }
-    $cli = $null
+    $bilgi = @{ Gecerli = $false; Kimlikler = (Get-KayitKimlikleri -Kayit $null -DosyaAdi $Dosya.Name) }
     try {
         $j = Get-Content -LiteralPath $Dosya.FullName -Raw -Encoding UTF8 | ConvertFrom-Json
-        if ($j.cliSessionId) { $cli = [string]$j.cliSessionId }
+        $bilgi.Gecerli = ([string]$j.sessionId -eq $Dosya.BaseName)
+        $bilgi.Kimlikler = Get-KayitKimlikleri -Kayit $j -DosyaAdi $Dosya.Name
     }
     catch {
-        Yaz-Gunluk ("Liste kaydi okunamadi: " + $Dosya.FullName + " | " + $_.Exception.Message) 'UYARI'
-        return $null
+        # Uygulama dosyayı o an yazıyor olabilir; geçersiz sayılır ve bu turda kopyalanmaz
+        Yaz-Gunluk ("Liste kaydi okunamadi, bu turda kopyalanmayacak: " + $Dosya.FullName + " | " + $_.Exception.Message) 'UYARI'
+        return $bilgi
     }
-    $script:CliOnbellek[$anahtar] = $cli
-    return $cli
+    $script:CliOnbellek[$anahtar] = $bilgi
+    return $bilgi
 }
 
 function Kopyala-Atomik {
@@ -346,10 +391,23 @@ function Esitle-Kok {
         $liste = $surumler[$ad]
         $enYeni = $liste | Sort-Object LastWriteTimeUtc -Descending | Select-Object -First 1
 
-        # Kullanıcının sildiği oturumun kalan kopyaları yedeğe taşınır (silinmez, geri de gelmez)
         if ($ad -like 'local_*.json') {
-            $cli = Get-CliKimligi -Dosya $enYeni
-            if ($cli -and $silinen.Contains($cli)) {
+            # Kaynak, en yeni GEÇERLİ sürümdür. Bozuk ya da yarım yazılmış bir sürüm hiçbir klasöre kopyalanmaz;
+            # onu taşıyan klasör daha yeni tarihli olduğu için aşağıdaki karşılaştırmada atlanır, üstüne yazılmaz.
+            $bilgi = $null
+            foreach ($surum in @($liste | Sort-Object LastWriteTimeUtc -Descending)) {
+                $aday = Get-KayitBilgisi -Dosya $surum
+                if ($aday.Gecerli) { $enYeni = $surum; $bilgi = $aday; break }
+                $uyariAnahtari = $surum.FullName + '|' + $surum.LastWriteTimeUtc.Ticks
+                if ($script:UyarilanBozuk.Add($uyariAnahtari)) {
+                    Yaz-Gunluk "Gecersiz liste kaydi kopyalanmadi (sessionId dosya adiyla uyusmuyor ya da okunamadi): $($surum.FullName)" 'UYARI'
+                }
+            }
+            if (-not $bilgi) { continue }
+            # Kullanıcının sildiği oturumun kalan kopyaları yedeğe taşınır (silinmez, geri de gelmez)
+            $silindi = $false
+            foreach ($kimlik in $bilgi.Kimlikler) { if ($silinen.Contains($kimlik)) { $silindi = $true; break } }
+            if ($silindi) {
                 foreach ($f in $liste) {
                     $hedefKlasor = Join-Path $YedekKlasor "${zaman}_silinen\$($f.Directory.Parent.Name)\$($f.Directory.Name)"
                     if ($KuruCalisma) {
@@ -509,7 +567,8 @@ function Onar-EksikKayitlar {
         [void]$yerelKimlikler.Add($dosya.BaseName)
         try {
             $j = Get-Content $dosya.FullName -Raw -Encoding UTF8 | ConvertFrom-Json
-            if ($j.cliSessionId) { [void]$kayitli.Add([string]$j.cliSessionId) }
+            # cliSessionId, eski kimlikler (priorCliSessionIds) ve dosya adı: hepsi "kaydı var" sayılır
+            foreach ($kimlik in (Get-KayitKimlikleri -Kayit $j -DosyaAdi $dosya.Name)) { [void]$kayitli.Add($kimlik) }
             if ($j.originCwd -and $j.gitAnchors -and -not $capalar.ContainsKey($j.originCwd)) { $capalar[$j.originCwd] = $j.gitAnchors }
         }
         catch {

@@ -14,7 +14,9 @@ Hesap değişince öbür hesabın oturumları silinmez ama listede görünmez. `
 
 - **Çift yönlü eşitleme:** Bütün hesap klasörlerini (bir hesap birden fazla kuruluş klasörü kullanabilir) gerçek klasör olarak tutar. Her kayıt dosyasının en yeni sürümünü öbür klasörlere kopyalar. Değiştirilme zamanını koruduğu için kopyalar klasörler arasında gidip gelmez.
 - **Arka plan izleyicisi:** Gizli bir izleyici klasörleri 15 saniyede bir (uygulama kapalıyken 2 saniyede bir) eşitler. 10 dakikada bir de kayıp kayıt onarımı ve ayar eşitlemesi yapar. Böylece hesap değiştirdiğin anda öbür hesabın listesi zaten günceldir. İzleyici tek kopya çalışır ve betik güncellenince kendini yeni sürümle yeniden başlatır. Günlüğe yalnız yeni dosya ya da taşıma olan turları yazar.
-- **Silinen oturumlar geri gelmez:** Bir hesapta silinen oturumun (`deleted_<kimlik>` işareti) öbür klasörlerdeki kopyaları silinmez, `yedek\` klasörüne taşınır.
+- **Silinen oturumlar geri gelmez:** Bir hesapta silinen oturumun (`deleted_<kimlik>` işareti) öbür klasörlerdeki kopyaları silinmez, `yedek\` klasörüne taşınır. İşaret, uygulamanın yaptığı gibi kaydın bütün kimlikleriyle karşılaştırılır: `cliSessionId`, `unarchivedCliSessionId`, `priorCliSessionIds` ve dosya adındaki kimlik.
+- **Bozuk kayıt yayılmaz:** Kopyanın kaynağı en yeni **geçerli** sürümdür; JSON olarak okunabilmeli ve `sessionId` alanı dosya adıyla aynı olmalı. Yarım yazılmış ya da bozuk bir sürüm hiçbir klasöre kopyalanmaz ve sağlam kopyaların üstüne yazılmaz.
+- **Günlük şişmez:** `esitleme.log` 5 MB'ı aşınca `esitleme_<zaman>.log` adıyla saklanır ve yeni bir günlük başlar.
 - **Kayıp kayıt onarımı:** Sohbet dökümü duran ama listede kaydı olmayan oturumların kaydını dökümden yeniden oluşturur. Silinmiş oturumlar, son 15 dakikada açılan oturumlar ve uygulama günlüğüne göre yaşayan bir oturumun eski kimliği olan dökümler onarılmaz.
 - **Worktree kiralama onarımı:** Uygulama her worktree'yi `git-worktrees.json` defterinde bir oturuma kiralar (`leasedBy`). Dökümden yeniden üretilen bir oturum yeni kimlik alırsa defter eski kimliği gösterir. Uygulama o zaman worktree'yi yeniden kurmaya çalışır, "branch is checked out somewhere else" hatası verir ve o oturumda mesaj gönderilemez ("Bir şeyler ters gitti"). Betik, kiracısının kaydı olmayan worktree'leri onu kullanan gerçek oturuma yeniden kiralar. Onarımda da defterdeki eski kimliği yeniden kullanır. Ayrıca eksik worktree çapasını (`gitAnchors`) ekler. Bunları uygulama kapalıyken yapar; uygulama kapalıyken izleyici 2 saniyede bir bakar. `-ZorlaDuzelt` ile uygulama açıkken de yapar.
 - **Ortak ayarlar:** Kayıtlı ortam ayarlarını (`ccd-session-presets.json`) ve MCP araç seçimlerini (`mcp-user-tool-toggles.json`) iki hesapta aynı yapar. Yalnızca eksik olanı ekler. Uygulama açıkken bu dosyaları kendi belleğinden yeniden yazdığı için bu adım yalnız uygulama kapalıyken çalışır.
@@ -109,6 +111,14 @@ powershell -NoProfile -Command "Get-CimInstance Win32_Process -Filter \"Name='po
 ```
 
 Kenar çubuğunda aynı proje iki grup olarak görünüyorsa, sebep büyük ihtimalle elle oluşturulmuş ve projeyle aynı adı taşıyan özel bir gruptur. Bu gruplar uygulamanın kendi deposunda durduğu için betik onlara dokunmaz. Grubu uygulamadan sil ya da Claude'dan silmesini iste. Oturumlar silinmez, projeye göre gruplanır.
+
+## Hesap değiştirmeden iki hesabı kullanmak
+
+Masaüstü uygulamasının girişi ile Claude Code'un terminal ve VS Code/Cursor eklentisi girişi birbirinden bağımsızdır. Resmi belgeye göre eklenti ve terminal aynı konuşma geçmişini paylaşır ve bu geçmiş bilgisayarda, hesaptan bağımsız durur. Bu yüzden hiç hesap değiştirmeden iki hesabı birlikte kullanabilirsin: masaüstü uygulamasını bir hesapta, eklentiyi ya da terminali öbür hesapta tut. Bunun bedeli, iki tarafın ayrı oturum listeleri tutmasıdır.
+
+## Gelecek: uygulama içi çoklu hesap
+
+Masaüstü uygulamasının kodunda, Anthropic'in sunucu tarafında açtığı bir anahtara bağlı bir çoklu hesap özelliği bulunuyor (kurumsal ilkesi `disableMultiAccount`, "Single account only"). Özellik kademeli olarak açılıyor. Zorla açmaya çalışma. Hesap menüsünde başka hesap ekleme seçeneği belirdiğinde bu betiğe hâlâ gerek olup olmadığını yeniden değerlendir.
 
 ## Sınırlar
 
