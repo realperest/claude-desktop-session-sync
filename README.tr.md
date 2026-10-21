@@ -166,6 +166,7 @@ Masaüstü uygulamasının içinde, sunucu tarafındaki bir anahtara bağlı bir
 | `sablon/claude-md-bolum.md` | `~/.claude/CLAUDE.md` dosyasına yazılan bölümün şablonu. |
 | `tests/Test-Sync.ps1` | Sahte bir veri klasöründe uçtan uca test. Gerçek Claude verine hiç dokunmaz. |
 | `docs/FINDINGS.md` | Masaüstü uygulamasının oturumları nasıl sakladığı ve aracı yaparken öğrendiklerimiz. |
+| `docs/MACOS-KILAVUZ.md` | macOS'a taşıma kılavuzu: karşılaşılan sorunların ve çözümlerin bütün hikâyesi, son tasarım ve taşıma planı. macOS desteği planlanıyor, henüz hazır değil. |
 
 ## Uyarı
 

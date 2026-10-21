@@ -166,6 +166,7 @@ The desktop app already contains a multi-account feature behind a server-side fl
 | `sablon/claude-md-bolum.md` | Template of the section written into `~/.claude/CLAUDE.md`. |
 | `tests/Test-Sync.ps1` | End-to-end test on a fake data folder. It never touches your real Claude data. |
 | `docs/FINDINGS.md` | How the desktop app stores sessions, and what we learned while building this. |
+| `docs/MACOS-KILAVUZ.md` | Turkish handoff guide for porting the tool to macOS: the full history of the problems and fixes, the final design, and the porting plan. macOS support is planned but not available yet. |
 
 The scripts' internal names, log messages, and comments are in Turkish, because the project started as a personal tool. Contributions that translate them are welcome.
 
